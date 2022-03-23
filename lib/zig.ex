@@ -142,6 +142,62 @@ defmodule Zig do
     ...
   ```
 
+  You can also link system libraries.  This relies on `zig build`'s ability
+  to locate system libraries.  Note that you will need to follow your system's
+  library convention, for example in the case of linux, that means removing the
+  "lib" prefix and the ".so" extension.
+
+  #### Example (system libraries)
+
+  ```
+  defmodule Blas do
+    use Zig,
+      system_libs: ["blas"],
+      include: ["/usr/include/x86_64-linux-gnu"]
+
+    ~Z\"""
+    const blas = @cImport({
+      @cInclude("cblas.h");
+    ...
+  ```
+
+  ### Compiling C/C++ files
+
+  You can direct zigler to use zig cc to compile C or C++ files that are in
+  your directory tree.  Currently, you must explicitly pick each file, in the
+  future, there may be support for directories (and selecting compile options)
+  based on customizeable rules.
+
+  To do this, fill the "sources" option with a list of files (represented as
+  strings), or a file/options pair (represented as a tuple).
+
+  ```
+  defmodule UsesCOrCpp do
+    use Zig,
+      link_libc: true,
+      link_libcpp: true,
+      include: ["my_header.h"],
+      sources: [
+        "some_c_source.c",
+        {"some_cpp_source.cpp", ["-std=c++17"]}
+      ]
+
+    ~Z\"""
+    ...
+  ```
+
+  Don't forget to include relevant h files, and set the `link_libc: true`
+  and/or the `link_libcpp: true` options if your code needs the c or c++
+  standard libraries
+
+
+  You can also set these values via config
+  ```
+  config :zigler,
+    libs: ["/usr/lib/x86_64-linux-gnu/blas/libblas.so"],
+    include: ["/usr/include/x86_64-linux-gnu"]
+  ```
+
   ### Compilation assistance
 
   If something should go wrong, Zigler will translate the Zig compiler error
@@ -176,7 +232,6 @@ defmodule Zig do
 
   If you would like to include a custom c header file, create an `include/`
   directory inside your path tree and it will be available to zig as a default
-  search path as follows:
 
   ```
   ~Z\"""
@@ -223,6 +278,9 @@ defmodule Zig do
   alias Zig.Compiler
   alias Zig.Parser
 
+  @includes Application.compile_env(:zigler, :include, [])
+  @libs Application.compile_env(:zigler, :libs, [])
+
   # default release modes.
   # you can override these in your `use Zigler` statement.
   @spec __using__(keyword) :: Macro.t
@@ -234,13 +292,26 @@ defmodule Zig do
     |> Compiler.assembly_dir(__CALLER__.module)
     |> File.rm_rf!
 
-    user_opts = opts
-    |> Keyword.take(~w(libs resources dry_run c_includes
-    system_include_dirs local link_libc)a)
 
-    include_dirs = opts
-    |> Keyword.get(:include, [])
-    |> Kernel.++(if has_include_dir?(__CALLER__), do: ["include"], else: [])
+    user_opts =
+      opts
+      |> Keyword.take(~w(libs resources dry_run c_includes system_include_dirs local link_libc)a)
+      |> then(fn opts ->
+        if @libs == [] do
+          opts
+        else
+          Keyword.put(opts, :libs, @libs)
+        end
+      end)
+
+    include_dirs =
+      if @includes == [] do
+        opts
+        |> Keyword.get(:include, [])
+        |> Kernel.++(if has_include_dir?(__CALLER__), do: ["include"], else: [])
+      else
+        @includes
+      end
 
     zigler! = struct(%Zig.Module{
       file:         Path.relative_to_cwd(__CALLER__.file),
